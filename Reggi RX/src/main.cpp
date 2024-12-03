@@ -4,7 +4,6 @@
 #include <RadioLib.h>
 #include <Wire.h>
 
-// Определяем пины для LoRa и SPI
 #define LORA_MISO 19
 #define LORA_MOSI 23
 #define LORA_SCK 18
@@ -12,59 +11,76 @@
 #define LORA_DIO0 26
 #define LORA_DIO1 25
 #define LORA_RST 14
-// Создаем объект SPI для работы с VSPI
+
 SPIClass spi(VSPI);
 
-// Создаем объект модуля SX1276
+
 SX1276 radio = new Module(LORA_NSS, LORA_DIO0, LORA_RST, LORA_DIO1, spi, SPISettings(8000000, MSBFIRST, SPI_MODE0));
-// Объявление структуры для данных каналов CRSF
+
 crsf_channels_t channelData;
 
-serialIO *receiver = new crsf(Serial1, 2);  // Убедитесь, что пины верные для заднего порта TX12
+serialIO *receiver = new crsf(Serial1, 2);
+
+bool isBound = false;
+const uint32_t expectedUniqueID = 0xDEADBEEF;
+const uint8_t expectedSyncWord = 0x34;
+
+void ICACHE_RAM_ATTR SendToFlight(SX1276 &radio)
+{
+  int state = radio.receive((uint8_t*)&channelData, sizeof(channelData));
+
+  if (state == RADIOLIB_ERR_NONE) {
+    Serial2.write((uint8_t*)&channelData, sizeof(channelData));
+  }
+}
 
 void ICACHE_RAM_ATTR waitForBindingRequest(SX1276 &radio) {
   Serial.println("Waiting for binding request...");
-  uint8_t buffer[10];  // Буфер для приема данных
-  
-  // Ожидание биндинга
-  while (true) {
+  uint8_t buffer[10];
+
+  while (!isBound) {
     int state = radio.receive(buffer, sizeof(buffer));
     if (state == RADIOLIB_ERR_NONE) {
       uint32_t receivedID;
       memcpy(&receivedID, buffer, sizeof(receivedID));
 
-      // Применяем новые параметры
-      uint8_t newSyncWord = buffer[4];
-      float newFrequency;
-      memcpy(&newFrequency, &buffer[5], sizeof(newFrequency));
+      uint8_t receivedSyncWord = buffer[4];
 
-      Serial.print("Binding request received! ID: ");
-      Serial.println(receivedID, HEX);
-      Serial.print("New frequency: ");
-      Serial.println(newFrequency);
-      Serial.print("New sync word: 0x");
-      Serial.println(newSyncWord, HEX);
+      if (receivedID != expectedUniqueID) {
+        Serial.println("Received unique ID does not match! Ignoring request.");
+        continue;
+      }
 
-      // Настраиваем радиомодуль
-      radio.setSyncWord(newSyncWord);
-      radio.setFrequency(newFrequency);
+      if (receivedSyncWord != expectedSyncWord) {
+        Serial.println("Received sync word does not match! Ignoring request.");
+        continue;
+      }
 
-      // Отправляем подтверждение
-      radio.transmit((uint8_t*)"ACK", 3);
+      radio.setSyncWord(receivedSyncWord);
+
+      uint8_t ack[5];
+      memcpy(ack, &receivedID, sizeof(receivedID));
+      ack[4] = 0xAA;
+      radio.transmit(ack, sizeof(ack));
+
       Serial.println("Binding successful!");
-      break;
+      isBound = true;  // Устанавливаем флаг бинда
+    } else if (state == RADIOLIB_ERR_RX_TIMEOUT) {
+      Serial.println("Timeout waiting for binding request...");
+    } else {
+      Serial.print("Error receiving binding request: ");
+      Serial.println(state);
     }
     delay(100);
   }
 }
 
 void setup() {
-  Serial.begin(115200);  // Инициализация монитора порта для вывода данных
-  receiver->begin();     // Инициализация приёмника CRSF
-  // Инициализация SPI с пинами
+  Serial.begin(115200);
+  receiver->begin();
+
   spi.begin(LORA_SCK, LORA_MISO, LORA_MOSI, LORA_NSS);
 
-  // Инициализация радио модуля
   Serial.print(F("[SX1276] Initializing ... "));
   int state = radio.begin();
   if (state == RADIOLIB_ERR_NONE) {
@@ -74,51 +90,27 @@ void setup() {
     Serial.println(state);
     while (true) { delay(10); }
   }
-  // set carrier frequency to 433.5 MHz
   if (radio.setFrequency(520.5) == RADIOLIB_ERR_INVALID_FREQUENCY) {
     Serial.println(F("Selected frequency is invalid for this module!"));
     while (true) { delay(10); }
   }
-
-  // set bandwidth to 250 kHz
-  if (radio.setBandwidth(125.0) == RADIOLIB_ERR_INVALID_BANDWIDTH) {
-    Serial.println(F("Selected bandwidth is invalid for this module!"));
+  if (radio.setBandwidth(125.0) == RADIOLIB_ERR_INVALID_BANDWIDTH ||
+      radio.setSpreadingFactor(10) == RADIOLIB_ERR_INVALID_SPREADING_FACTOR ||
+      radio.setCodingRate(6) == RADIOLIB_ERR_INVALID_CODING_RATE ||
+      radio.setOutputPower(10) == RADIOLIB_ERR_INVALID_OUTPUT_POWER) {
+    Serial.println(F("Error configuring radio module!"));
     while (true) { delay(10); }
   }
 
-  // set spreading factor to 10
-  if (radio.setSpreadingFactor(10) == RADIOLIB_ERR_INVALID_SPREADING_FACTOR) {
-    Serial.println(F("Selected spreading factor is invalid for this module!"));
-    while (true) { delay(10); }
-  }
-
-  // set coding rate to 6
-  if (radio.setCodingRate(6) == RADIOLIB_ERR_INVALID_CODING_RATE) {
-    Serial.println(F("Selected coding rate is invalid for this module!"));
-    while (true) { delay(10); }
-  }
-
-  if (radio.setOutputPower(10) == RADIOLIB_ERR_INVALID_OUTPUT_POWER) {
-    Serial.println(F("Selected output power is invalid for this module!"));
-    while (true) { delay(10); }
-  }
-
-  waitForBindingRequest(radio &radio)
 }
 
 void loop() {
-  // Попытка получить данные с LoRa
-  int state = radio.receive((uint8_t*)&channelData, sizeof(channelData));
 
-  if (state == RADIOLIB_ERR_NONE) {
-    Serial.println(F("Data received successfully!"));
-
-    // Передача данных в полётный контроллер через UART
-    //mySerial.write((uint8_t*)&channelData, sizeof(channelData));
-  } else {
-    Serial.print(F("Error while receiving data: "));
-    Serial.println(state);
+  if (!isBound) {
+    waitForBindingRequest(radio);
   }
-
-  delay(1000);  // Задержка
+  if(isBound)
+  {
+    SendToFlight(radio);
+  }
 }
