@@ -4,7 +4,6 @@
 #include <RadioLib.h>
 #include <Wire.h>
 
-
 #define LORA_MISO 19
 #define LORA_MOSI 23
 #define LORA_SCK 18
@@ -15,22 +14,124 @@
 
 SPIClass spi(VSPI);
 
-// Создаем объект модуля SX1276
+
 SX1276 radio = new Module(LORA_NSS, LORA_DIO0, LORA_RST, LORA_DIO1, spi, SPISettings(8000000, MSBFIRST, SPI_MODE0));
 
 crsf_channels_t channelData;
 
 serialIO *receiver = new crsf(Serial1, 2);
 
+struct BindFrame {
+  uint64_t signature;
+  bool connected;
+  uint16_t crc;
+};
+
 bool isBound = false;
+bool bindingRequested = true; // BindAutoRun
+uint32_t lastPingTime = 0;
+const uint32_t pingInterval = 1000;
+const int maxBindAttempts = 5;
 
-uint32_t uniqueID = 0xDEADBEEF;
-uint8_t newSyncWord = 0x34;
+uint16_t calculateCRC(const uint8_t *data, size_t len) {
+  uint16_t crc = 0xFFFF;
+  for (size_t i = 0; i < len; ++i) {
+    crc ^= data[i];
+    for (uint8_t j = 8; j; --j) {
+      if (crc & 0x01)
+        crc = (crc >> 1) ^ 0xA001;
+      else
+        crc >>= 1;
+    }
+  }
+  return crc;
+}
 
-void ICACHE_RAM_ATTR sendCRSF(serialIO &receiver, SX1276 &radio)
-{
+void sendBindFrame(uint64_t signature) {
+  BindFrame frame;
+  frame.signature = signature;
+  frame.connected = isBound;
+  frame.crc = calculateCRC((uint8_t *)&frame, sizeof(frame) - 2);
+
+  int state = radio.transmit((uint8_t *)&frame, sizeof(frame));
+  if (state == RADIOLIB_ERR_NONE) {
+    Serial.println(F("Binding frame sent"));
+  } else {
+    Serial.print(F("Failed to send binding frame, error: "));
+    Serial.println(state);
+  }
+}
+
+bool receiveBindFrame(uint64_t signature) {
+  BindFrame frame;
+  int state = radio.receive((uint8_t *)&frame, sizeof(frame));
+
+  if (state == RADIOLIB_ERR_NONE) {
+    if (frame.signature == signature && frame.crc == calculateCRC((uint8_t *)&frame, sizeof(frame) - 2)) {
+      Serial.println(F("Binding frame received and verified"));
+      return true;
+    }
+  }
+  return false;
+}
+
+void handleBinding() {
+  uint64_t txSignature = ESP.getEfuseMac();
+  uint64_t rxSignature = ~txSignature; // Для теста RX должен использовать обратный идентификатор
+  int attempts = 0;
+
+  while (!isBound && attempts < maxBindAttempts) {
+    sendBindFrame(txSignature);
+    if (receiveBindFrame(rxSignature)) {
+      isBound = true;
+      Serial.println(F("Binding successful!"));
+      break;
+    }
+    attempts++;
+    delay(500);
+  }
+
+  if (!isBound) {
+    Serial.println(F("Binding failed!"));
+  }
+}
+
+void checkConnection() {
+  if (millis() - lastPingTime > pingInterval) {
+    sendBindFrame(ESP.getEfuseMac());
+    lastPingTime = millis();
+  }
+}
+
+void initRadio() {
+  int state = radio.begin();
+  if (state == RADIOLIB_ERR_NONE) {
+    Serial.println(F("Radio initialized successfully!"));
+  } else {
+    Serial.print(F("Radio initialization failed, error: "));
+    Serial.println(state);
+    while (true)
+      delay(10);
+  }
+
+  if (radio.setFrequency(915.5) != RADIOLIB_ERR_NONE) {
+    Serial.println(F("Failed to set frequency"));
+    while (true)
+      delay(10);
+  }
+
+  if (radio.setBandwidth(125.0) != RADIOLIB_ERR_NONE ||
+      radio.setSpreadingFactor(10) != RADIOLIB_ERR_NONE ||
+      radio.setCodingRate(6) != RADIOLIB_ERR_NONE ||
+      radio.setOutputPower(10) != RADIOLIB_ERR_NONE) {
+    Serial.println(F("Radio configuration failed"));
+    while (true)
+      delay(10);
+  }
+}
+
+void sendCRSF(serialIO &receiver, SX1276 &radio) {
   receiver.processIncoming();
-
   receiver.getChannel(&channelData);
 
   int state = radio.transmit((uint8_t*)&channelData, sizeof(channelData));
@@ -42,81 +143,22 @@ void ICACHE_RAM_ATTR sendCRSF(serialIO &receiver, SX1276 &radio)
   }
 }
 
-void ICACHE_RAM_ATTR sendBindingRequest(SX1276 &radio, uint32_t uniqueID, uint8_t syncWord) {
-  uint8_t buffer[10];
-  memcpy(buffer, &uniqueID, sizeof(uniqueID));
-  buffer[4] = syncWord;
-
-  Serial.println("Sending binding request...");
-  int16_t state = radio.transmit(buffer, sizeof(buffer));
-  if (state == RADIOLIB_ERR_NONE) {
-    Serial.println("Binding request sent. Waiting for ACK...");
-
-    // Ожидаем ACK
-    uint8_t ack[5] = {0};
-    state = radio.receive(ack, sizeof(ack));
-    if (state == RADIOLIB_ERR_NONE) {
-      // Проверяем уникальный ID в ACK
-      uint32_t receivedID;
-      memcpy(&receivedID, ack, sizeof(receivedID));
-
-      if (receivedID == uniqueID && ack[4] == 0xAA) {
-        Serial.println("Binding successful! Correct ACK received.");
-        isBound = true;  // Устанавливаем флаг бинда
-        radio.setSyncWord(syncWord);  // Применяем новое синхро-слово
-      } else {
-        Serial.println("Incorrect ACK received. Binding failed.");
-      }
-    } else if (state == RADIOLIB_ERR_RX_TIMEOUT) {
-      Serial.println("No ACK received. Binding timeout.");
-    } else {
-      Serial.print("Error receiving ACK: ");
-      Serial.println(state);
-    }
-  } else {
-    Serial.print("Failed to send binding request. Error: ");
-    Serial.println(state);
-  }
-}
-
 void setup() {
-  Serial.begin(115200);  // Инициализация монитора порта для вывода данных
-  receiver->begin();     // Инициализация приёмника CRSF
-  // Инициализация SPI с пинами
-  spi.begin(LORA_SCK, LORA_MISO, LORA_MOSI, LORA_NSS);
-
-  // Инициализация радио модуля
-  Serial.print(F("[SX1276] Initializing ... "));
-  int state = radio.begin();
-  if (state == RADIOLIB_ERR_NONE) {
-    Serial.println(F("success!"));
-  } else {
-    Serial.print(F("failed, code "));
-    Serial.println(state);
-    while (true) { delay(10); }
-  }
-  // Настройка модуля
-  if (radio.setFrequency(520.5) == RADIOLIB_ERR_INVALID_FREQUENCY) {
-    Serial.println(F("Selected frequency is invalid for this module!"));
-    while (true) { delay(10); }
-  }
-  if (radio.setBandwidth(125.0) == RADIOLIB_ERR_INVALID_BANDWIDTH ||
-      radio.setSpreadingFactor(10) == RADIOLIB_ERR_INVALID_SPREADING_FACTOR ||
-      radio.setCodingRate(6) == RADIOLIB_ERR_INVALID_CODING_RATE ||
-      radio.setOutputPower(10) == RADIOLIB_ERR_INVALID_OUTPUT_POWER) {
-    Serial.println(F("Error configuring radio module!"));
-    while (true) { delay(10); }
-  }
-
+  Serial.begin(115200);
+  spi.begin();
+  initRadio();
 }
 
 void loop() {
-
-  if (!isBound) {
-    sendBindingRequest(radio, uniqueID, newSyncWord);
+  if (bindingRequested) {
+    handleBinding();
+    bindingRequested = false;
   }
+
   if (isBound) {
-    sendCRSF(*receiver, radio);
+    checkConnection();
+    sendCRSF(*receiver, radio); 
   }
-
 }
+
+
