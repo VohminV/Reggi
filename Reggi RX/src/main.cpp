@@ -1,62 +1,55 @@
 #include <Arduino.h>
 #include <RadioLib.h>
 #include <Wire.h>
+#include <EEPROM.h>
+#include <ESPAsyncWebServer.h>
+#include <AsyncTCP.h>
+#include <DNSServer.h>
 
-#define LORA_MISO 12
-#define LORA_MOSI 13
-#define LORA_SCK 14
-#define LORA_NSS 15
-#define LORA_DIO0 4
-#define LORA_DIO1 5
-#define LORA_RST 2
-#define LED_PIN 16 
+#define LORA_MISO 19
+#define LORA_MOSI 23
+#define LORA_SCK 18
+#define LORA_NSS 5
+#define LORA_DIO0 26
+#define LORA_DIO1 25
+#define LORA_RST 14
+#define LORA_BUSY 26
 
-SPIClass spi;
+#define BIND_SIGNATURE 0x123456789ABCDEF0
 
-Module loraModule(LORA_NSS, LORA_DIO0, LORA_RST, LORA_DIO1, spi);  // Create Module object
-SX1276 radio = SX1276(&loraModule);  // Pass Module object to SX1276 constructor
+SPIClass spi(VSPI);
 
-// Прототипы функций управления светодиодом
-void led_red_on();
-void led_red_off();
-void led_red_toggle();
-void leds_init(void);
 
-typedef struct crsf_channels_s {
-  unsigned channel1 : 11;
-  unsigned channel2 : 11;
-  unsigned channel3 : 11;
-  unsigned channel4 : 11;
-  unsigned channel5 : 11;
-  unsigned channel6 : 11;
-  unsigned channel7 : 11;
-  unsigned channel8 : 11;
-  unsigned channel9 : 11;
-  unsigned channel10 : 11;
-  unsigned channel11 : 11;
-  unsigned channel12 : 11;
-  unsigned channel13 : 11;
-  unsigned channel14 : 11;
-  unsigned channel15 : 11;
-  unsigned channel16 : 11;
-} crsf_channels_s;
+// EEPROM Addresses
+#define EEPROM_FREQ_ADDR 0
+#define EEPROM_POWER_ADDR 4
 
-crsf_channels_s channelData;
+// Default radio values
+float frequency = 415.5; // Default frequency in MHz
+int power = 10;          // Default power in dBm
+const uint32_t bindingTimeout = 180000; // 3 minutes
 
+
+#if USE_SX127X == 1
+SX1276 radio = new Module(LORA_NSS, LORA_DIO0, LORA_RST, LORA_DIO1, spi, SPISettings(8000000, MSBFIRST, SPI_MODE0));
+#else
+SX1268 radio = new Module(LORA_NSS, LORA_DIO1, LORA_RST, LORA_BUSY, spi, SPISettings(8000000, MSBFIRST, SPI_MODE0));
+#endif
+
+uint64_t deviceSignature = BIND_SIGNATURE; // Уникальный идентификатор устройства
 bool isBound = false;
-bool bindingRequested = true; // Автоматически запустить процесс биндинга
+bool bindingRequested = true;
 
 struct BindFrame {
   uint64_t signature;
-  bool connected;
   uint16_t crc;
 };
 
-uint16_t calculateCRC(const uint8_t* data, size_t len) {
+uint16_t ICACHE_RAM_ATTR calculateCRC(const uint8_t* data, size_t len) {
   uint16_t crc = 0xFFFF;
   for (size_t i = 0; i < len; ++i) {
     crc ^= data[i];
-    for (uint8_t j = 8; j; --j) {
+    for (uint8_t j = 0; j < 8; ++j) {
       if (crc & 0x01) crc = (crc >> 1) ^ 0xA001;
       else crc >>= 1;
     }
@@ -64,109 +57,127 @@ uint16_t calculateCRC(const uint8_t* data, size_t len) {
   return crc;
 }
 
-uint64_t generateDeviceSignature() {
-  uint32_t chipId = ESP.getChipId(); // Получение уникального идентификатора чипа
-  return ((uint64_t)chipId << 32) | (~chipId & 0xFFFFFFFF); // Комбинированный идентификатор
-}
-
-bool receiveBindFrame(uint64_t signature) {
+bool ICACHE_RAM_ATTR receiveBindFrame() {
   BindFrame frame;
   int state = radio.receive((uint8_t*)&frame, sizeof(frame));
-
+  
   if (state == RADIOLIB_ERR_NONE) {
-    if (frame.crc == calculateCRC((uint8_t*)&frame, sizeof(frame) - 2) && frame.signature == signature) {
-      Serial.println(F("Binding frame received and verified"));
+    if (frame.crc == calculateCRC((uint8_t*)&frame, sizeof(frame) - 2)) {
+      Serial.println(F("Binding frame received and verified."));
       return true;
     }
   }
   return false;
 }
 
-void receiveCRSF() {
-  int state = radio.receive((uint8_t*)&channelData, sizeof(channelData));
+void ICACHE_RAM_ATTR sendAckFrame(uint64_t signature) {
+  BindFrame ackFrame;
+  ackFrame.signature = signature;
+  ackFrame.crc = calculateCRC((uint8_t*)&ackFrame, sizeof(ackFrame) - 2);
+
+  int state = radio.transmit((uint8_t*)&ackFrame, sizeof(ackFrame));
   if (state == RADIOLIB_ERR_NONE) {
-    Serial.write((uint8_t*)&channelData, sizeof(channelData));
+    Serial.println(F("Acknowledgment frame sent."));
+  } else {
+    Serial.print(F("Failed to send acknowledgment frame, error: "));
+    Serial.println(state);
   }
 }
 
-void blinkLED() {
-  static unsigned long lastBlink = 0;
-  static bool ledState = LOW;
+void ICACHE_RAM_ATTR handleBinding() {
+  Serial.println(F("Waiting for binding frame..."));
 
-  if (millis() - lastBlink > 500) {  
-    ledState = !ledState;           
-    digitalWrite(LED_PIN, ledState);
-    lastBlink = millis();
+  unsigned long startTime = millis();
+  const unsigned long timeout = 30000; // 30 секунд для привязки
+
+  while (!isBound && (millis() - startTime < timeout)) {
+    BindFrame frame;
+    int state = radio.receive((uint8_t*)&frame, sizeof(frame)); // Таймаут 2 секунды
+    if (state == RADIOLIB_ERR_NONE) {
+      // Проверка полученного кадра привязки
+      if (frame.signature == deviceSignature &&
+          frame.crc == calculateCRC((uint8_t*)&frame, sizeof(frame) - 2)) {
+        Serial.println(F("Binding frame received. Sending acknowledgment..."));
+
+        // Отправка подтверждения
+        BindFrame ackFrame;
+        ackFrame.signature = deviceSignature;
+        ackFrame.crc = calculateCRC((uint8_t*)&ackFrame, sizeof(ackFrame) - 2);
+
+        state = radio.transmit((uint8_t*)&ackFrame, sizeof(ackFrame));
+        if (state == RADIOLIB_ERR_NONE) {
+          Serial.println(F("Acknowledgment sent successfully! Binding complete."));
+          isBound = true;
+        } else {
+          Serial.print(F("Failed to send acknowledgment, error: "));
+          Serial.println(state);
+        }
+      } else {
+        Serial.println(F("Invalid binding frame received."));
+      }
+    } else {
+      Serial.println(F("No binding frame received. Waiting..."));
+    }
+  }
+
+  if (!isBound) {
+    Serial.println(F("Binding process timed out."));
   }
 }
 
-void handleBinding() {
-  uint64_t txSignature = ~generateDeviceSignature(); // RX signature must be opposite of TX signature
-  if (receiveBindFrame(txSignature)) {
-    isBound = true;
-    Serial.println(F("Binding successful!"));
-    led_red_on();  // Включаем светодиод
-  }
-}
 
-void initRadio() {
+void  ICACHE_RAM_ATTR initRadio() {
+  #if USE_SX127X == 1
   int state = radio.begin();
   if (state == RADIOLIB_ERR_NONE) {
     Serial.println(F("Radio initialized successfully!"));
   } else {
     Serial.print(F("Radio initialization failed, error: "));
     Serial.println(state);
-    while (true) delay(10); 
+    while (true)
+      delay(10);
   }
 
-  if (radio.setFrequency(915.5) != RADIOLIB_ERR_NONE) {
+  if (radio.setFrequency(frequency) != RADIOLIB_ERR_NONE) {
     Serial.println(F("Failed to set frequency"));
-    while (true) delay(10);
+    while (true)
+      delay(10);
   }
 
   if (radio.setBandwidth(125.0) != RADIOLIB_ERR_NONE ||
       radio.setSpreadingFactor(10) != RADIOLIB_ERR_NONE ||
       radio.setCodingRate(6) != RADIOLIB_ERR_NONE ||
-      radio.setOutputPower(10) != RADIOLIB_ERR_NONE) {
+      radio.setOutputPower(power) != RADIOLIB_ERR_NONE) {
     Serial.println(F("Radio configuration failed"));
-    while (true) delay(10);
+    while (true)
+      delay(10);
   }
+  // radio.begin(434.0, 125.0, 9, 7, 0x12, 10, 8, 0, false); 
+  #else
+  int state = radio.begin(frequency, 125.0, 9, 7, 0x12, power, 8, 0, false); 
+  if (state == RADIOLIB_ERR_NONE) {
+    Serial.println(F("Radio initialized successfully!"));
+  } else {
+    Serial.print(F("Radio initialization failed, error: "));
+    Serial.println(state);
+    while (true)
+      delay(10);
+  }
+  #endif
 }
 
-// Инициализация светодиода
-void leds_init() {
-  pinMode(LED_PIN, OUTPUT);  // Настроить пин светодиода как выход
-  digitalWrite(LED_PIN, LOW); // Изначально выключить
-}
-
-// Включить светодиод
-void led_red_on() {
-  digitalWrite(LED_PIN, HIGH);  // Включить светодиод
-}
-
-// Выключить светодиод
-void led_red_off() {
-  digitalWrite(LED_PIN, LOW);  // Выключить светодиод
-}
-
-// Переключить состояние светодиода
-void led_red_toggle() {
-  digitalWrite(LED_PIN, !digitalRead(LED_PIN));  // Переключить состояние светодиода
-}
 
 void setup() {
-  delay(10000);
   Serial.begin(115200); 
   Serial.println(F("Run!!!"));
   spi.begin();
 
-  leds_init(); // Инициализация светодиода
-
   initRadio();
+  handleBinding();
 }
 
 void loop() {
-  if (bindingRequested) {
+   /* if (bindingRequested) {
     blinkLED();
     handleBinding();
     bindingRequested = !isBound;
@@ -174,5 +185,5 @@ void loop() {
 
   if (isBound) {
     receiveCRSF();
-  }
+  }*/
 }
