@@ -4,9 +4,12 @@
 #include <ESPAsyncWebServer.h>
 #include <AsyncTCP.h>
 #include <DNSServer.h>
-
-
-#define BIND_SIGNATURE 0x123456789ABCDEF0
+//BIND
+#define BIND_PHRASE  "mlrs.0" 
+#define FRAME_TX_RX_LEN  91
+#include "bind.h"
+#define DEVICE_IS_TRANSMITTER
+tBindBase bind;
 // CRSF Constants
 #define CRSF_MAX_PACKET_SIZE 64
 #define CRSF_ADDRESS_FLIGHT_CONTROLLER 0xC8
@@ -47,7 +50,6 @@ float frequency = 415.5; // Default frequency in MHz
 int power = 10;          // Default power in dBm
 const uint32_t bindingTimeout = 180000; // 3 minutes
 
-bool isBound = false;
 bool bindingRequested = true;
 bool webServerStarted = false;
 uint32_t lastPingTime = 0;
@@ -56,105 +58,17 @@ const uint32_t pingInterval = 1000;
 AsyncWebServer server(80);
 // Captive Portal
 DNSServer dnsServer;
-uint64_t deviceSignature = BIND_SIGNATURE; // Уникальный идентификатор устройства
 
-struct BindFrame {
-  uint64_t signature;
-  uint16_t crc;
-};
-
-uint16_t ICACHE_RAM_ATTR calculateCRC(const uint8_t* data, size_t len) {
-  uint16_t crc = 0xFFFF;
-  for (size_t i = 0; i < len; ++i) {
-    crc ^= data[i];
-    for (uint8_t j = 0; j < 8; ++j) {
-      if (crc & 0x01) crc = (crc >> 1) ^ 0xA001;
-      else crc >>= 1;
-    }
-  }
-  return crc;
+void  ICACHE_RAM_ATTR start_bind(void)
+{
+    if (!bind.IsInBind()) bind.StartBind();
 }
 
-void ICACHE_RAM_ATTR sendBindFrame() {
-  BindFrame frame;
-  frame.signature = deviceSignature;
-  frame.crc = calculateCRC((uint8_t*)&frame, sizeof(frame) - 2);
-
-  int state = radio.transmit((uint8_t*)&frame, sizeof(frame));
-  if (state == RADIOLIB_ERR_NONE) {
-    Serial.println(F("Binding frame sent"));
-  } else {
-    Serial.print(F("Failed to send binding frame, error: "));
-    Serial.println(state);
-  }
+void  ICACHE_RAM_ATTR stop_bind(void)
+{
+    if (bind.IsInBind()) bind.StopBind();
 }
 
-bool ICACHE_RAM_ATTR receiveAckFrame() {
-  BindFrame ackFrame;
-  int state = radio.receive((uint8_t*)&ackFrame, sizeof(ackFrame));
-  if (state == RADIOLIB_ERR_NONE) {
-    if (ackFrame.signature == deviceSignature && 
-        ackFrame.crc == calculateCRC((uint8_t*)&ackFrame, sizeof(ackFrame) - 2)) {
-      Serial.println(F("Binding acknowledgment received!"));
-      return true;
-    }
-  }
-  return false;
-}
-
-void ICACHE_RAM_ATTR handleBinding() {
-  Serial.println(F("Starting binding process..."));
-
-  unsigned long startTime = millis();
-  const unsigned long timeout = 30000; // 30 секунд для привязки
-
-  BindFrame frame;
-  frame.signature = deviceSignature;
-  frame.crc = calculateCRC((uint8_t*)&frame, sizeof(frame) - 2);
-
-  while (!isBound && (millis() - startTime < timeout)) {
-    Serial.println(F("Sending binding frame..."));
-
-    // Отправка кадра привязки
-    int state = radio.transmit((uint8_t*)&frame, sizeof(frame));
-    if (state == RADIOLIB_ERR_NONE) {
-      Serial.println(F("Binding frame sent. Waiting for acknowledgment..."));
-
-      // Ожидание подтверждения
-      BindFrame ackFrame;
-      state = radio.receive((uint8_t*)&ackFrame, sizeof(ackFrame)); // Таймаут 2 секунды
-      if (state == RADIOLIB_ERR_NONE) {
-        // Проверка подтверждения
-        if (ackFrame.signature == deviceSignature &&
-            ackFrame.crc == calculateCRC((uint8_t*)&ackFrame, sizeof(ackFrame) - 2)) {
-          Serial.println(F("Binding acknowledgment received! Binding successful."));
-          isBound = true;
-        } else {
-          Serial.println(F("Invalid acknowledgment received."));
-        }
-      } else {
-        Serial.println(F("No acknowledgment received. Retrying..."));
-      }
-    } else {
-      Serial.print(F("Failed to send binding frame, error: "));
-      Serial.println(state);
-    }
-
-    delay(500); // Задержка между попытками
-  }
-
-  if (!isBound) {
-    Serial.println(F("Binding process timed out."));
-  }
-}
-
-// Checking the connection
-void ICACHE_RAM_ATTR checkConnection() {
-  if (millis() - lastPingTime > pingInterval) {
-    sendBindFrame();
-    lastPingTime = millis();
-  }
-}
 
 // Radio initialization
 void ICACHE_RAM_ATTR initRadio() {
@@ -184,7 +98,7 @@ void ICACHE_RAM_ATTR initRadio() {
       delay(10);
   }
   #else
-  int state = radio.begin(frequency, 125.0, 9, 7, 0x12, power, 8, 0, false); 
+  int state = radio.begin(frequency, 500.0, 9, 7, 0x12, power, 8, 0, false); 
   if (state == RADIOLIB_ERR_NONE) {
     Serial.println(F("Radio initialized successfully!"));
   } else {
@@ -254,44 +168,55 @@ void setup() {
   Serial.begin(115200);
   EEPROM.begin(512);
   spi.begin();
-  crsfSerial.begin(400000, SERIAL_8N1, 2, -1); // Set baud rate and pins
+  crsfSerial.begin(400000, SERIAL_8N1, 2, -1);
 
   EEPROM.get(EEPROM_FREQ_ADDR, frequency);
   EEPROM.get(EEPROM_POWER_ADDR, power);
- 
-  if (frequency < 100.0 || frequency > 1000.0) {
-    frequency = 915.5;
-  }
 
-  if (power < 2 || power > 20) {
-    power = 10;
-  }
+  if (frequency < 100.0 || frequency > 1000.0) frequency = 915.5;
+  if (power < 2 || power > 20) power = 10;
 
   WiFi.softAP("Reggi TX", "12345678");
   IPAddress apIP(10, 0, 0, 1);
   WiFi.softAPConfig(apIP, apIP, IPAddress(255, 255, 255, 0));
   dnsServer.start(53, "*", apIP);
+
   initRadio();
-  handleBinding();
+  bind.Init(&radio);
+  bindStartTime = millis();
+  Serial.println("Setup complete.");
 }
 
 void loop() {
-  dnsServer.processNextRequest(); 
-  /*if (bindingRequested) {
-    handleBinding();
-    //bindingRequested = false;
+  dnsServer.processNextRequest();
+  bind.Do();
 
-    if (!isBound && !webServerStarted) {
-      setupWebServer();
+  // Если биндинг активен, обрабатываем привязку
+  if (bind.IsInBind()) {
+    uint8_t rx_status = bind.do_receive(0, false);
+    bind.handle_receive(0, rx_status);
+
+    if (rx_status == RX_STATUS_VALID) {
+      Serial.println("Binding successful!");
+      bind.StopBind();
+    }
+
+    // Проверка таймера биндинга
+    if (millis() - bindStartTime > bindingTimeout) {
+      Serial.println("Binding timeout. Starting web server...");
+      bind.StopBind();
+      if (!webServerStarted) {
+        setupWebServer();
+      }
     }
   }
- /*
-  if (isBound) {
+
+  // После привязки отправляем данные через LoRa
+  if (!bind.IsInBind()) {
     while (crsfSerial.available()) {
-      checkConnection();
       uint8_t _rxData[CRSF_MAX_PACKET_SIZE];
       crsfSerial.readBytes(_rxData, CRSF_MAX_PACKET_SIZE);
       radio.transmit(_rxData, CRSF_MAX_PACKET_SIZE);
     }
-  }*/
+  }
 }
