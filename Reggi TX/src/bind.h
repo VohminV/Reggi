@@ -2,7 +2,7 @@
 #define BIND_H
 #pragma once
 #define DEVICE_IS_TRANSMITTER
-
+uint8_t connect_state;
 #if USE_SX127X == 1
     SX1276* radioBind;  // For SX1276
 #else
@@ -19,6 +19,13 @@ typedef enum {
 #endif
     RX_STATUS_VALID, // frame received and crc (and crc1) valid
 } RX_STATUS_ENUM;
+
+
+typedef enum {
+    CONNECT_STATE_LISTEN = 0,
+    CONNECT_STATE_SYNC,
+    CONNECT_STATE_CONNECTED,
+} CONNECT_STATE_ENUM;
 
 #define MCRF4XX_INIT_CRC  0xffff
 extern bool connected(void);
@@ -94,7 +101,7 @@ class tBindBase
     void Tick_ms(void);
     void Do(void);
     uint8_t Task(void);
-
+    bool connected(void);
     void AutoBind(void); // only for receiver, call every ms
     uint32_t auto_bind_tmo_ms;
 
@@ -175,14 +182,38 @@ void tBindBase::Tick_ms(void)
     
 }
 
+bool tBindBase::connected(void)
+{
+    return (connect_state == CONNECT_STATE_CONNECTED);
+}
 
 // called in each doPreTransmit or doPostReceive cycle
 void tBindBase::Do(void)
 {
+    uint32_t tnow = millis();
+
+    if (!is_in_binding && !is_connected) { 
+        binding_requested = true;
+    }
+
     if (!is_in_binding && binding_requested) {
         is_in_binding = true;
         task = BIND_TASK_CHANGED_TO_BIND;
+        Serial.println("Binding started automatically...");
     }
+
+#ifdef DEVICE_IS_TRANSMITTER
+    if (is_in_binding) {
+        if (is_connected && !connected()) {
+            task = BIND_TASK_TX_RESTART_CONTROLLER;
+        }
+        is_connected = connected();
+
+        if (binding_stop_requested) {
+            task = BIND_TASK_TX_RESTART_CONTROLLER;
+        }
+    }
+#endif
 }
 
 
