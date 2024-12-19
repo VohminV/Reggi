@@ -50,8 +50,8 @@ void ICACHE_RAM_ATTR initRadio()
   }
 
   if (radio.setBandwidth(125.0) != RADIOLIB_ERR_NONE ||
-      radio.setSpreadingFactor(10) != RADIOLIB_ERR_NONE ||
-      radio.setCodingRate(6) != RADIOLIB_ERR_NONE ||
+      radio.setSpreadingFactor(6) != RADIOLIB_ERR_NONE ||
+      radio.setCodingRate(5) != RADIOLIB_ERR_NONE ||
       radio.setOutputPower(power) != RADIOLIB_ERR_NONE)
   {
     Serial.println(F("Radio configuration failed"));

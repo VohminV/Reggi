@@ -14,7 +14,6 @@ SX1278 radio = new Module(LORA_NSS, LORA_DIO0, LORA_RST, LORA_DIO1, spi, SPISett
 // CRSF Serial setup
 HardwareSerial CRSFSerial(1);
 
-
 AsyncWebServer server(80);
 // Captive Portal
 DNSServer dnsServer;
@@ -53,8 +52,8 @@ void ICACHE_RAM_ATTR initRadio()
   }
 
   if (radio.setBandwidth(125.0) != RADIOLIB_ERR_NONE ||
-      radio.setSpreadingFactor(10) != RADIOLIB_ERR_NONE ||
-      radio.setCodingRate(6) != RADIOLIB_ERR_NONE ||
+      radio.setSpreadingFactor(6) != RADIOLIB_ERR_NONE ||
+      radio.setCodingRate(5) != RADIOLIB_ERR_NONE ||
       radio.setOutputPower(power) != RADIOLIB_ERR_NONE)
   {
     Serial.println(F("Radio configuration failed"));
@@ -165,20 +164,26 @@ void ICACHE_RAM_ATTR bind_do_transmit()
   }
 }
 
-void ICACHE_RAM_ATTR leftShift(uint8_t arr[], size_t size) {
+void ICACHE_RAM_ATTR leftShift(uint8_t arr[], size_t size)
+{
   memmove(arr, arr + 1, (size - 1));
   arr[size - 1] = 0xFF;
 }
 
-
-uint8_t ICACHE_RAM_ATTR crc8(uint8_t *data, uint8_t len) {
+uint8_t ICACHE_RAM_ATTR crc8(uint8_t *data, uint8_t len)
+{
   uint8_t crc = 0;
-  for (uint8_t i = 0; i < len; i++) {
+  for (uint8_t i = 0; i < len; i++)
+  {
     crc ^= data[i];
-    for (uint8_t j = 0; j < 8; j++) {
-      if (crc & 0x80) {
+    for (uint8_t j = 0; j < 8; j++)
+    {
+      if (crc & 0x80)
+      {
         crc = (crc << 1) ^ CRC8_POLY_D5;
-      } else {
+      }
+      else
+      {
         crc <<= 1;
       }
     }
@@ -186,14 +191,13 @@ uint8_t ICACHE_RAM_ATTR crc8(uint8_t *data, uint8_t len) {
   return crc;
 }
 
-
 void setup()
 {
   Serial.begin(115200);
   EEPROM.begin(512);
   spi.begin();
 
-  CRSFSerial.begin(CRSF_BAUDRATE, SERIAL_8N1, 13, -1);
+  CRSFSerial.begin(400000, SERIAL_8N1, 13, -1);
 
   EEPROM.get(EEPROM_FREQ_ADDR, frequency);
   EEPROM.get(EEPROM_POWER_ADDR, power);
@@ -233,7 +237,8 @@ void loop()
       Serial.println("Binding timeout. Binding process failed.");
       bindingRequested = false;
       bindingCompleted = false;
-      if (!webServerStarted) {
+      if (!webServerStarted)
+      {
         setupWebServer();
         webServerStarted = true;
       }
@@ -242,27 +247,32 @@ void loop()
 
   if (bindingCompleted)
   {
-  crsf_data_t txData;
+    crsf_data_t txData;
 
     // Логика чтения данных CRSF и заполнения структуры
     uint8_t size = CRSF_MAX_PACKET_SIZE;
-    while (CRSFSerial.available()) {
+    while (CRSFSerial.available())
+    {
       _rxData[CRSF_MAX_PACKET_SIZE - 1] = CRSFSerial.read();
       if (crc8(&_rxData[CRSF_MAX_PACKET_SIZE - size],
-               _rxData[CRSF_MAX_PACKET_SIZE - size - 1]) == 0) {
+               _rxData[CRSF_MAX_PACKET_SIZE - size - 1]) == 0)
+      {
         if ((_rxData[CRSF_MAX_PACKET_SIZE - size - 2] ==
              CRSF_ADDRESS_FLIGHT_CONTROLLER) ||
             (_rxData[CRSF_MAX_PACKET_SIZE - size - 2] ==
-             CRSF_ADDRESS_CRSF_TRANSMITTER)) {
+             CRSF_ADDRESS_CRSF_TRANSMITTER))
+        {
           if (_rxData[CRSF_MAX_PACKET_SIZE - size] ==
-              CRSF_FRAMETYPE_RC_CHANNELS_PACKED) {
-              memcpy(&txData.channels, &_rxData[CRSF_MAX_PACKET_SIZE - size + 1],
+              CRSF_FRAMETYPE_RC_CHANNELS_PACKED)
+          {
+            memcpy(&txData.channels, &_rxData[CRSF_MAX_PACKET_SIZE - size + 1],
                    sizeof(crsf_channels_t));
           }
         }
       }
       if (_rxData[CRSF_MAX_PACKET_SIZE - 2] == CRSF_ADDRESS_CRSF_TRANSMITTER ||
-          _rxData[CRSF_MAX_PACKET_SIZE - 2] == CRSF_ADDRESS_FLIGHT_CONTROLLER) {
+          _rxData[CRSF_MAX_PACKET_SIZE - 2] == CRSF_ADDRESS_FLIGHT_CONTROLLER)
+      {
         size = _rxData[CRSF_MAX_PACKET_SIZE - 1];
       }
       leftShift(_rxData, sizeof(_rxData));
@@ -273,9 +283,12 @@ void loop()
     txData.bind_elements[2] = BIND_PHRASE[6];
 
     int state = radio.transmit((uint8_t *)&txData, sizeof(crsf_data_t));
-    if (state == RADIOLIB_ERR_NONE) {
+    if (state == RADIOLIB_ERR_NONE)
+    {
       Serial.println("CRSF data transmitted successfully!");
-    } else {
+    }
+    else
+    {
       Serial.print("CRSF data transmission failed, error: ");
       Serial.println(state);
     }
