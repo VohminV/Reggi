@@ -7,8 +7,7 @@
 #include <../../lib/Variables.h>
 #include <../../lib/crsf_protocol.h>
 
-
-//SPI setup
+// SPI setup
 SPIClass spi(VSPI);
 
 // Radio setup
@@ -93,13 +92,14 @@ void ICACHE_RAM_ATTR bind_do_receive()
   }
 }
 
-void ICACHE_RAM_ATTR setupWebServer() {
+void ICACHE_RAM_ATTR setupWebServer()
+{
 
-  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
-    request->redirect("/config");
-  });
+  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request)
+            { request->redirect("/config"); });
 
-  server.on("/config", HTTP_GET, [](AsyncWebServerRequest *request) {
+  server.on("/config", HTTP_GET, [](AsyncWebServerRequest *request)
+            {
     String html = "<!DOCTYPE html><html><head><style>";
     html += "body { font-family: Arial, sans-serif; text-align: center; background-color: #f4f4f4; }";
     html += "form { display: inline-block; margin-top: 50px; }";
@@ -114,11 +114,10 @@ void ICACHE_RAM_ATTR setupWebServer() {
     html += "<input type='submit' value='Set'>";
     html += "</form>";
     html += "</body></html>";
-    request->send(200, "text/html", html);
-  });
+    request->send(200, "text/html", html); });
 
-
-  server.on("/set", HTTP_GET, [](AsyncWebServerRequest *request) {
+  server.on("/set", HTTP_GET, [](AsyncWebServerRequest *request)
+            {
     if (request->hasParam("freq")) {
       frequency = request->getParam("freq")->value().toFloat();
       EEPROM.put(EEPROM_FREQ_ADDR, frequency);
@@ -130,8 +129,7 @@ void ICACHE_RAM_ATTR setupWebServer() {
     EEPROM.commit();
     request->redirect("/config");
     delay(1000);
-    ESP.restart();
-  });
+    ESP.restart(); });
   server.begin();
   webServerStarted = true;
 }
@@ -165,60 +163,83 @@ void loop()
 {
   dnsServer.processNextRequest();
 
-  // Если биндинг ещё не запущен и еще не завершен, запускаем его
   if (!bindingRequested && !bindingCompleted)
   {
     Serial.println("Starting binding process...");
     bindingRequested = true;
-    bindStartTime = millis(); // Обновляем время начала биндинга
+    bindStartTime = millis();
   }
 
   // Обработка биндинга
   if (bindingRequested && !bindingCompleted)
   {
     Serial.println("Processing binding...");
-    bind_do_receive(); // Проверка входящих данных на биндинг
+    bind_do_receive();
 
     // Проверка таймера биндинга
     if (millis() - bindStartTime > bindingTimeout)
     {
       Serial.println("Binding timeout. Binding process failed.");
-      if (!webServerStarted) {
+      if (!webServerStarted)
+      {
         setupWebServer();
         webServerStarted = true;
       }
-      bindingRequested = false; // Завершаем процесс биндинга
+      bindingRequested = false;
     }
   }
 
   if (bindingCompleted)
   {
-    Serial.println("GOD");
-    /*uint8_t receivedPacket[CRSF_MAX_PACKET_SIZE + 1]; // Пакет с контрольным байтом
+    crsf_data_t receivedData;
+    uint8_t receivedPacket[sizeof(crsf_data_t)];
 
-    // Получаем пакет
-    int state = radio.receive(receivedPacket, CRSF_MAX_PACKET_SIZE + 1);
+    int state = radio.receive(receivedPacket, sizeof(receivedPacket));
     if (state == RADIOLIB_ERR_NONE)
     {
-      // Проверяем контрольный байт
-      uint8_t controlByte = receivedPacket[CRSF_MAX_PACKET_SIZE];
-      if (controlByte != 0x01)
+      memcpy(&receivedData, receivedPacket, sizeof(crsf_data_t));
+
+      Serial.println("Channels data received:");
+      uint16_t channelValues[16];
+      channelValues[0] = receivedData.channels.channel1;
+      channelValues[1] = receivedData.channels.channel2;
+      channelValues[2] = receivedData.channels.channel3;
+      channelValues[3] = receivedData.channels.channel4;
+      channelValues[4] = receivedData.channels.channel5;
+      channelValues[5] = receivedData.channels.channel6;
+      channelValues[6] = receivedData.channels.channel7;
+      channelValues[7] = receivedData.channels.channel8;
+      channelValues[8] = receivedData.channels.channel9;
+      channelValues[9] = receivedData.channels.channel10;
+      channelValues[10] = receivedData.channels.channel11;
+      channelValues[11] = receivedData.channels.channel12;
+      channelValues[12] = receivedData.channels.channel13;
+      channelValues[13] = receivedData.channels.channel14;
+      channelValues[14] = receivedData.channels.channel15;
+      channelValues[15] = receivedData.channels.channel16;
+
+      for (int i = 0; i < 16; i++)
       {
-        Serial.println("Invalid control byte received, discarding packet.");
-        return; // Пропускаем обработку пакета
+        Serial.print("Channel ");
+        Serial.print(i + 1);
+        Serial.print(": ");
+        Serial.println(channelValues[i]);
       }
 
-      // Удаляем контрольный байт и восстанавливаем исходный пакет
-      memmove(receivedPacket, receivedPacket, CRSF_MAX_PACKET_SIZE);
+      Serial.print("Bind elements: ");
+      for (int i = 0; i < sizeof(receivedData.bind_elements); i++)
+      {
+        Serial.print(receivedData.bind_elements[i], HEX);
+        Serial.print(" ");
+      }
+      Serial.println();
 
-      // Копируем восстановленные данные в структуру
-      //memcpy(&_channelData, receivedPacket, sizeof(_channelData));
       Serial.println("Valid packet received and processed.");
     }
     else
     {
       Serial.print("Failed to receive packet, error: ");
       Serial.println(state);
-    }*/
+    }
   }
 }

@@ -38,7 +38,8 @@ bool webServerStarted = false;
 
 //FRAME
 #define FRAME_LEN 70
-
+#define CRC8_POLY_D5 0xD5
+uint8_t _rxData[CRSF_MAX_PACKET_SIZE]={0};
 typedef struct crsf_data_s {
     crsf_channels_t channels;
     char bind_elements[3]; 
