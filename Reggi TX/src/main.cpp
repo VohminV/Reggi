@@ -197,7 +197,7 @@ void setup()
   EEPROM.begin(512);
   spi.begin();
 
-  CRSFSerial.begin(400000, SERIAL_8N1, 13, -1);
+  CRSFSerial.begin(CRSF_BAUDRATE, SERIAL_8N1, 13, -1);
 
   EEPROM.get(EEPROM_FREQ_ADDR, frequency);
   EEPROM.get(EEPROM_POWER_ADDR, power);
@@ -251,7 +251,7 @@ void loop()
 
     // Логика чтения данных CRSF и заполнения структуры
     uint8_t size = CRSF_MAX_PACKET_SIZE;
-    while (CRSFSerial.available())
+    if (CRSFSerial.available()>0)
     {
       _rxData[CRSF_MAX_PACKET_SIZE - 1] = CRSFSerial.read();
       if (crc8(&_rxData[CRSF_MAX_PACKET_SIZE - size],
@@ -277,7 +277,6 @@ void loop()
       }
       leftShift(_rxData, sizeof(_rxData));
     }
-
     txData.bind_elements[0] = BIND_PHRASE[0];
     txData.bind_elements[1] = BIND_PHRASE[3];
     txData.bind_elements[2] = BIND_PHRASE[6];
@@ -285,6 +284,7 @@ void loop()
     int state = radio.transmit((uint8_t *)&txData, sizeof(crsf_data_t));
     if (state == RADIOLIB_ERR_NONE)
     {
+      memset(_rxData, 0, sizeof(_rxData));
       Serial.println("CRSF data transmitted successfully!");
     }
     else
@@ -293,6 +293,4 @@ void loop()
       Serial.println(state);
     }
   }
-
-  delay(1000);
 }
