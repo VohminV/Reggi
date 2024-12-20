@@ -1,6 +1,6 @@
 #include "crsf_protocol.h"
 
-//LORA
+// LORA
 #define LORA_MISO 19
 #define LORA_MOSI 23
 #define LORA_SCK 18
@@ -24,23 +24,28 @@ uint32_t bindStartTime = 0;
 const uint32_t pingInterval = 1000;
 unsigned long timeout = 0;
 
-
 // EEPROM Addresses
 #define EEPROM_FREQ_ADDR 0
 #define EEPROM_POWER_ADDR 4
 
 // Default radio values
-float frequency = 450.0;                // Default frequency in MHz
-int power = 10;                         // Default power in dBm
+float frequency = 450.0; // Default frequency in MHz
+int power = 10;          // Default power in dBm
 
-//Web Server
+// Web Server
 bool webServerStarted = false;
 
-//FRAME
+// FRAME
 #define FRAME_LEN 70
 #define CRC8_POLY_D5 0xD5
-uint8_t _rxData[CRSF_MAX_PACKET_SIZE]={0};
-typedef struct crsf_data_s {
+uint8_t _rxData[CRSF_MAX_PACKET_SIZE] = {0};
+typedef struct crsf_data_s
+{
     crsf_channels_t channels;
-    char bind_elements[3]; 
+    char bind_elements[3];
 } crsf_data_t;
+
+// CRC
+#define crclen 256
+uint8_t crc8tab[crclen];
+uint8_t crcpoly;

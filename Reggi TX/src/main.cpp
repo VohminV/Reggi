@@ -6,6 +6,7 @@
 #include <DNSServer.h>
 #include <../../lib/Variables.h>
 #include <../../lib/crsf_protocol.h>
+#include <../../lib/function.cpp>
 
 // SPI setup
 SPIClass spi(VSPI);
@@ -19,6 +20,7 @@ AsyncWebServer server(80);
 DNSServer dnsServer;
 
 // flag to indicate that a packet was sent or received
+
 volatile bool operationDone = false;
 
 void ICACHE_RAM_ATTR setFlag(void)
@@ -170,27 +172,6 @@ void ICACHE_RAM_ATTR leftShift(uint8_t arr[], size_t size)
   arr[size - 1] = 0xFF;
 }
 
-uint8_t ICACHE_RAM_ATTR crc8(uint8_t *data, uint8_t len)
-{
-  uint8_t crc = 0;
-  for (uint8_t i = 0; i < len; i++)
-  {
-    crc ^= data[i];
-    for (uint8_t j = 0; j < 8; j++)
-    {
-      if (crc & 0x80)
-      {
-        crc = (crc << 1) ^ CRC8_POLY_D5;
-      }
-      else
-      {
-        crc <<= 1;
-      }
-    }
-  }
-  return crc;
-}
-
 void setup()
 {
   Serial.begin(115200);
@@ -198,6 +179,8 @@ void setup()
   spi.begin();
 
   CRSFSerial.begin(CRSF_BAUDRATE, SERIAL_8N1, 13, -1);
+
+  initializeCRC8();
 
   EEPROM.get(EEPROM_FREQ_ADDR, frequency);
   EEPROM.get(EEPROM_POWER_ADDR, power);
@@ -248,14 +231,11 @@ void loop()
   if (bindingCompleted)
   {
     crsf_data_t txData;
-
-    // Логика чтения данных CRSF и заполнения структуры
     uint8_t size = CRSF_MAX_PACKET_SIZE;
-    if (CRSFSerial.available()>0)
+    while (CRSFSerial.available())
     {
       _rxData[CRSF_MAX_PACKET_SIZE - 1] = CRSFSerial.read();
-      if (crc8(&_rxData[CRSF_MAX_PACKET_SIZE - size],
-               _rxData[CRSF_MAX_PACKET_SIZE - size - 1]) == 0)
+      if (calc(&_rxData[CRSF_MAX_PACKET_SIZE - size], size - 1, 0) == 0)
       {
         if ((_rxData[CRSF_MAX_PACKET_SIZE - size - 2] ==
              CRSF_ADDRESS_FLIGHT_CONTROLLER) ||
@@ -277,6 +257,7 @@ void loop()
       }
       leftShift(_rxData, sizeof(_rxData));
     }
+
     txData.bind_elements[0] = BIND_PHRASE[0];
     txData.bind_elements[1] = BIND_PHRASE[3];
     txData.bind_elements[2] = BIND_PHRASE[6];
