@@ -5,8 +5,7 @@
 #include <AsyncTCP.h>
 #include <DNSServer.h>
 #include <../../lib/Variables.h>
-#include <../../lib/crsf_protocol.h>
-#include <../../lib/function.cpp>
+
 // SPI setup
 SPIClass spi(VSPI);
 
@@ -156,7 +155,6 @@ void setup()
   initRadio();
   radio.startReceive();
   bindStartTime = millis();
-  initializeCRC8();
   Serial.println("Receiver setup complete.");
 }
 
@@ -242,5 +240,6 @@ void loop()
       Serial.print("Failed to receive packet, error: ");
       Serial.println(state);
     }
+    Serial.println(state);
   }
 }

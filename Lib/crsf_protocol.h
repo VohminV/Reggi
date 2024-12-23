@@ -14,7 +14,7 @@ extern "C" {
 #include <stdint.h>
 
 #define PACKED __attribute__((packed))
-#define CRSF_CRC_POLY 0xd5
+
 #define CRSF_BAUDRATE 420000 ///< CRSF default baud rate
 #define CRSF_NUM_CHANNELS 16 ///< CRSF number of channels
 #define CRSF_CHANNEL_VALUE_MIN                                                 \

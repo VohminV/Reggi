@@ -6,7 +6,6 @@
 #include <DNSServer.h>
 #include <../../lib/Variables.h>
 #include <../../lib/crsf_protocol.h>
-#include <../../lib/function.cpp>
 
 // SPI setup
 SPIClass spi(VSPI);
@@ -15,13 +14,61 @@ SX1278 radio = new Module(LORA_NSS, LORA_DIO0, LORA_RST, LORA_DIO1, spi, SPISett
 // CRSF Serial setup
 HardwareSerial CRSFSerial(1);
 
+#define CRSF_PIN 13
+
 AsyncWebServer server(80);
 // Captive Portal
 DNSServer dnsServer;
 
-// flag to indicate that a packet was sent or received
-
 volatile bool operationDone = false;
+
+/*
+void ICACHE_RAM_ATTR sendCRSFData()
+{
+  // Create structure for sending data
+  crsf_data_t txData;
+  const crsf_channels_t& channels = *crsf.getChannelsPacked();  // Dereference the pointer
+  txData.channels = channels;  // Assign the channel data
+
+  // Additional data (e.g., bind elements)
+  txData.bind_elements[0] = BIND_PHRASE[1];
+  txData.bind_elements[1] = BIND_PHRASE[3];
+  txData.bind_elements[2] = BIND_PHRASE[6];
+
+  // Send data via CRSF
+  int state = radio.transmit((uint8_t *)&txData, sizeof(crsf_data_t));
+
+  if (state == RADIOLIB_ERR_NONE)
+  {
+    Serial.println("CRSF data transmitted successfully!");
+  }
+  else
+  {
+    Serial.print("CRSF data transmission failed, error: ");
+    Serial.println(state);
+  }
+}*/
+
+uint8_t ICACHE_RAM_ATTR crc8(uint8_t *data, uint8_t len)
+{
+  uint8_t crc = 0;
+  for (uint8_t i = 0; i < len; i++)
+  {
+    crc ^= data[i];
+    for (uint8_t j = 0; j < 8; j++)
+    {
+      if (crc & 0x80)
+      {
+        crc = (crc << 1) ^ CRC8_POLY_D5;
+      }
+      else
+      {
+        crc <<= 1;
+      }
+    }
+  }
+  return crc;
+}
 
 void ICACHE_RAM_ATTR setFlag(void)
 {
@@ -178,10 +225,7 @@ void setup()
   EEPROM.begin(512);
   spi.begin();
 
-  CRSFSerial.begin(CRSF_BAUDRATE, SERIAL_8N1, 13, -1);
-
-  initializeCRC8();
-
+  CRSFSerial.begin(420000, SERIAL_8N1, CRSF_PIN, CRSF_PIN, true);
   EEPROM.get(EEPROM_FREQ_ADDR, frequency);
   EEPROM.get(EEPROM_POWER_ADDR, power);
 
@@ -228,14 +272,15 @@ void loop()
     }
   }
 
-  if (bindingCompleted)
+   if (bindingCompleted)
   {
     crsf_data_t txData;
     uint8_t size = CRSF_MAX_PACKET_SIZE;
     while (CRSFSerial.available())
     {
       _rxData[CRSF_MAX_PACKET_SIZE - 1] = CRSFSerial.read();
-      if (calc(&_rxData[CRSF_MAX_PACKET_SIZE - size], size - 1, 0) == 0)
+      if (crc8(&_rxData[CRSF_MAX_PACKET_SIZE - size],
+             _rxData[CRSF_MAX_PACKET_SIZE - size - 1]) == 0)
       {
         if ((_rxData[CRSF_MAX_PACKET_SIZE - size - 2] ==
              CRSF_ADDRESS_FLIGHT_CONTROLLER) ||

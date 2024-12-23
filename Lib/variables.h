@@ -1,5 +1,4 @@
 #include "crsf_protocol.h"
-
 // LORA
 #define LORA_MISO 19
 #define LORA_MOSI 23
@@ -37,15 +36,10 @@ bool webServerStarted = false;
 
 // FRAME
 #define FRAME_LEN 70
-#define CRC8_POLY_D5 0xD5
 uint8_t _rxData[CRSF_MAX_PACKET_SIZE] = {0};
+#define CRC8_POLY_D5 0xD5
 typedef struct crsf_data_s
 {
     crsf_channels_t channels;
     char bind_elements[3];
 } crsf_data_t;
-
-// CRC
-#define crclen 256
-uint8_t crc8tab[crclen];
-uint8_t crcpoly;
