@@ -4,8 +4,9 @@
 #include <ESPAsyncWebServer.h>
 #include <AsyncTCP.h>
 #include <DNSServer.h>
-#include <../../lib/Variables.h>
-
+#include "../../lib/Variables.h"
+#include "../../lib/crsf_protocol.h"
+#include "../../lib/crc8.h"
 // SPI setup
 SPIClass spi(VSPI);
 
@@ -191,55 +192,33 @@ void loop()
   if (bindingCompleted)
   {
     crsf_data_t receivedData;
-    uint8_t receivedPacket[sizeof(crsf_data_t)];
+    uint8_t packet[CRSF_MAX_PACKET_SIZE];
 
-    int state = radio.receive(receivedPacket, sizeof(receivedPacket));
+    int state = radio.receive(packet, sizeof(packet));
     if (state == RADIOLIB_ERR_NONE)
     {
-      memcpy(&receivedData, receivedPacket, sizeof(crsf_data_t));
+      memcpy(&receivedData, packet, sizeof(crsf_data_t));
 
-      Serial.println("Channels data received:");
-      uint16_t channelValues[16];
-      channelValues[0] = receivedData.channels.channel1;
-      channelValues[1] = receivedData.channels.channel2;
-      channelValues[2] = receivedData.channels.channel3;
-      channelValues[3] = receivedData.channels.channel4;
-      channelValues[4] = receivedData.channels.channel5;
-      channelValues[5] = receivedData.channels.channel6;
-      channelValues[6] = receivedData.channels.channel7;
-      channelValues[7] = receivedData.channels.channel8;
-      channelValues[8] = receivedData.channels.channel9;
-      channelValues[9] = receivedData.channels.channel10;
-      channelValues[10] = receivedData.channels.channel11;
-      channelValues[11] = receivedData.channels.channel12;
-      channelValues[12] = receivedData.channels.channel13;
-      channelValues[13] = receivedData.channels.channel14;
-      channelValues[14] = receivedData.channels.channel15;
-      channelValues[15] = receivedData.channels.channel16;
+      packet[0] = CRSF_SYNC_BYTE;
+      packet[1] = CRSF_ADDRESS_FLIGHT_CONTROLLER;
+      packet[2] = CRSF_FRAMETYPE_RC_CHANNELS_PACKED;
 
-      for (int i = 0; i < 16; i++)
-      {
-        Serial.print("Channel ");
-        Serial.print(i + 1);
-        Serial.print(": ");
-        Serial.println(channelValues[i]);
-      }
+      memcpy(&packet[3], &receivedData.channels, sizeof(receivedData.channels));
 
-      Serial.print("Bind elements: ");
-      for (int i = 0; i < sizeof(receivedData.bind_elements); i++)
-      {
-        Serial.print(receivedData.bind_elements[i], HEX);
-        Serial.print(" ");
-      }
-      Serial.println();
+      // Расчет CRC
+      Crc8 _crc(CRC8_POLY_D5);                                               
+      uint8_t crc = _crc.calc(&packet[2], sizeof(receivedData.channels) + 1);
 
-      Serial.println("Valid packet received and processed.");
+      packet[sizeof(receivedData.channels) + 3] = crc;
+
+      Serial2.write(packet, sizeof(receivedData.channels) + 4);
+
+      Serial.println("Channels data transmitted to flight controller.");
     }
     else
     {
       Serial.print("Failed to receive packet, error: ");
       Serial.println(state);
     }
-    Serial.println(state);
   }
 }
