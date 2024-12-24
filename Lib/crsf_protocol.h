@@ -32,6 +32,8 @@ extern "C" {
   (CRSF_MAX_PACKET_SIZE -                                                      \
    4) ///< Max size of payload in [dest] [len] [type] [payload] [crc8]
 #define CRSF_SYNC_BYTE 0XC8
+#define CRSF_BITS_PER_CHANNEL   11
+#define US_to_CRSF(us)      ((us) * 8 / 5 + (CRSF_CHANNEL_VALUE_MID - 2400))
 /** Length of different CRSF frame */
 enum {
   CRSF_FRAME_LENGTH_ADDRESS = 1,     // length of ADDRESS field

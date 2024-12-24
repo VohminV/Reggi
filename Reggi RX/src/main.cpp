@@ -6,7 +6,7 @@
 #include <DNSServer.h>
 #include "../../lib/Variables.h"
 #include "../../lib/crsf_protocol.h"
-#include "../../lib/crc8.h"
+
 // SPI setup
 SPIClass spi(VSPI);
 
@@ -25,6 +25,27 @@ void ICACHE_RAM_ATTR setFlag(void)
 AsyncWebServer server(80);
 // Captive Portal
 DNSServer dnsServer;
+
+uint8_t ICACHE_RAM_ATTR crc8(uint8_t *data, uint8_t len)
+{
+  uint8_t crc = 0;
+  for (uint8_t i = 0; i < len; i++)
+  {
+    crc ^= data[i];
+    for (uint8_t j = 0; j < 8; j++)
+    {
+      if (crc & 0x80)
+      {
+        crc = (crc << 1) ^ CRC8_POLY_D5;
+      }
+      else
+      {
+        crc <<= 1;
+      }
+    }
+  }
+  return crc;
+}
 
 // Radio initialization
 void ICACHE_RAM_ATTR initRadio()
@@ -137,6 +158,7 @@ void ICACHE_RAM_ATTR setupWebServer()
 void setup()
 {
   Serial.begin(115200);
+  Serial2.begin(420000);
   EEPROM.begin(512);
   spi.begin();
 
@@ -170,13 +192,11 @@ void loop()
     bindStartTime = millis();
   }
 
-  // Обработка биндинга
   if (bindingRequested && !bindingCompleted)
   {
     Serial.println("Processing binding...");
     bind_do_receive();
 
-    // Проверка таймера биндинга
     if (millis() - bindStartTime > bindingTimeout)
     {
       Serial.println("Binding timeout. Binding process failed.");
@@ -192,26 +212,66 @@ void loop()
   if (bindingCompleted)
   {
     crsf_data_t receivedData;
-    uint8_t packet[CRSF_MAX_PACKET_SIZE];
+    uint8_t receivedPacket[sizeof(crsf_data_t)];
 
-    int state = radio.receive(packet, sizeof(packet));
+    int state = radio.receive(receivedPacket, sizeof(receivedPacket));
     if (state == RADIOLIB_ERR_NONE)
     {
-      memcpy(&receivedData, packet, sizeof(crsf_data_t));
+      // DEBUG
+      packetCount++;
 
+      memcpy(&receivedData, receivedPacket, sizeof(crsf_data_t));
+
+      // Создаём массив значений каналов
+      uint16_t channelValues[CRSF_NUM_CHANNELS] = {
+          receivedData.channels.channel1,
+          receivedData.channels.channel2,
+          receivedData.channels.channel3,
+          receivedData.channels.channel4,
+          receivedData.channels.channel5,
+          receivedData.channels.channel6,
+          receivedData.channels.channel7,
+          receivedData.channels.channel8,
+          receivedData.channels.channel9,
+          receivedData.channels.channel10,
+          receivedData.channels.channel11,
+          receivedData.channels.channel12,
+          receivedData.channels.channel13,
+          receivedData.channels.channel14,
+          receivedData.channels.channel15,
+          receivedData.channels.channel16,
+      };
+
+      uint8_t packedChannels[(CRSF_NUM_CHANNELS * CRSF_BITS_PER_CHANNEL + 7) / 8];
+      uint8_t *pbuf = packedChannels;
+
+      uint32_t scratch = 0;
+      uint32_t bitsInScratch = 0;
+
+      // Упаковываем каналы
+      for (unsigned ch = 0; ch < CRSF_NUM_CHANNELS; ++ch)
+      {
+        uint32_t crsfVal = US_to_CRSF(channelValues[ch]); // Преобразование в CRSF
+        scratch |= crsfVal << bitsInScratch;
+        bitsInScratch += CRSF_BITS_PER_CHANNEL;
+        while (bitsInScratch > 8)
+        {
+          *pbuf++ = scratch;
+          scratch >>= 8;
+          bitsInScratch -= 8;
+        }
+      }
+
+      // Формируем пакет
+      uint8_t packet[CRSF_MAX_PACKET_SIZE];
       packet[0] = CRSF_SYNC_BYTE;
-      packet[1] = CRSF_ADDRESS_FLIGHT_CONTROLLER;
+      packet[1] = sizeof(packedChannels) + 2; // длина: тип + данные + CRC
       packet[2] = CRSF_FRAMETYPE_RC_CHANNELS_PACKED;
+      memcpy(&packet[3], packedChannels, sizeof(packedChannels));
+      packet[sizeof(packedChannels) + 3] = crc8(&packet[2], sizeof(packedChannels) + 1);
 
-      memcpy(&packet[3], &receivedData.channels, sizeof(receivedData.channels));
-
-      // Расчет CRC
-      Crc8 _crc(CRC8_POLY_D5);                                               
-      uint8_t crc = _crc.calc(&packet[2], sizeof(receivedData.channels) + 1);
-
-      packet[sizeof(receivedData.channels) + 3] = crc;
-
-      Serial2.write(packet, sizeof(receivedData.channels) + 4);
+      // Отправляем пакет
+      Serial2.write(packet, sizeof(packedChannels) + 4);
 
       Serial.println("Channels data transmitted to flight controller.");
     }

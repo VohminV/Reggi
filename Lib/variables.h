@@ -43,3 +43,9 @@ typedef struct crsf_data_s
     crsf_channels_t channels;
     char bind_elements[3];
 } crsf_data_t;
+
+
+//DEBUG
+unsigned long packetCount = 0;       
+unsigned long lastTime = 0;        
+unsigned int packetsPerMinute = 0; 

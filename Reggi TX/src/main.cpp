@@ -225,7 +225,7 @@ void setup()
   EEPROM.begin(512);
   spi.begin();
 
-  CRSFSerial.begin(420000, SERIAL_8N1, CRSF_PIN, CRSF_PIN, true);
+  CRSFSerial.begin(420000, SERIAL_8N1, CRSF_PIN, CRSF_PIN, true); // false
   EEPROM.get(EEPROM_FREQ_ADDR, frequency);
   EEPROM.get(EEPROM_POWER_ADDR, power);
 
@@ -272,7 +272,7 @@ void loop()
     }
   }
 
-   if (bindingCompleted)
+  if (bindingCompleted)
   {
     crsf_data_t txData;
     uint8_t size = CRSF_MAX_PACKET_SIZE;
@@ -291,7 +291,7 @@ void loop()
               CRSF_FRAMETYPE_RC_CHANNELS_PACKED)
           {
             memcpy(&txData.channels, &_rxData[CRSF_MAX_PACKET_SIZE - size + 1],
-                   sizeof(crsf_channels_t));
+                   sizeof(txData.channels));
           }
         }
       }
@@ -312,6 +312,10 @@ void loop()
     {
       memset(_rxData, 0, sizeof(_rxData));
       Serial.println("CRSF data transmitted successfully!");
+      unsigned long delayStart = millis();
+      while (millis() - delayStart < 10)
+      {
+      }
     }
     else
     {
