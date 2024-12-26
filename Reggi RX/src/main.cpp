@@ -155,6 +155,26 @@ void ICACHE_RAM_ATTR setupWebServer()
   webServerStarted = true;
 }
 
+uint8_t ICACHE_RAM_ATTR calculateLinkQuality(uint8_t rssi, int8_t snr)
+{
+  if (rssi > 100)
+  {
+    return 100;
+  }
+  else if (rssi > 50)
+  {
+    return 75;
+  }
+  else if (rssi > 25)
+  {
+    return 50;
+  }
+  else
+  {
+    return 25;
+  }
+}
+
 void setup()
 {
   Serial.begin(115200);
@@ -212,68 +232,79 @@ void loop()
   if (bindingCompleted)
   {
     crsf_data_t receivedData;
+    crsfLinkStatistics_t crsfLinkStats;
     uint8_t receivedPacket[sizeof(crsf_data_t)];
 
     int state = radio.receive(receivedPacket, sizeof(receivedPacket));
     if (state == RADIOLIB_ERR_NONE)
     {
       // DEBUG
-      packetCount++;
+      // packetCount++;
+
 
       memcpy(&receivedData, receivedPacket, sizeof(crsf_data_t));
+      uint16_t ChannelDataIn[16] = {0};
 
-      // Создаём массив значений каналов
-      uint16_t channelValues[CRSF_NUM_CHANNELS] = {
-          receivedData.channels.channel1,
-          receivedData.channels.channel2,
-          receivedData.channels.channel3,
-          receivedData.channels.channel4,
-          receivedData.channels.channel5,
-          receivedData.channels.channel6,
-          receivedData.channels.channel7,
-          receivedData.channels.channel8,
-          receivedData.channels.channel9,
-          receivedData.channels.channel10,
-          receivedData.channels.channel11,
-          receivedData.channels.channel12,
-          receivedData.channels.channel13,
-          receivedData.channels.channel14,
-          receivedData.channels.channel15,
-          receivedData.channels.channel16,
-      };
+      ChannelDataIn[0] = receivedData.channels.channel1;
+      ChannelDataIn[1] = receivedData.channels.channel2;
+      ChannelDataIn[2] = receivedData.channels.channel3;
+      ChannelDataIn[3] = receivedData.channels.channel4;
+      ChannelDataIn[4] = receivedData.channels.channel5;
+      ChannelDataIn[5] = receivedData.channels.channel6;
+      ChannelDataIn[6] = receivedData.channels.channel7;
+      ChannelDataIn[7] = receivedData.channels.channel8;
+      ChannelDataIn[8] = receivedData.channels.channel9;
+      ChannelDataIn[9] = receivedData.channels.channel10;
+      ChannelDataIn[10] = receivedData.channels.channel11;
+      ChannelDataIn[11] = receivedData.channels.channel12;
+      ChannelDataIn[12] = receivedData.channels.channel13;
+      ChannelDataIn[13] = receivedData.channels.channel14;
+      ChannelDataIn[14] = receivedData.channels.channel15;
+      ChannelDataIn[15] = receivedData.channels.channel16;
 
-      uint8_t packedChannels[(CRSF_NUM_CHANNELS * CRSF_BITS_PER_CHANNEL + 7) / 8];
-      uint8_t *pbuf = packedChannels;
-
-      uint32_t scratch = 0;
-      uint32_t bitsInScratch = 0;
-
-      // Упаковываем каналы
+      // Инвертируем значения каналов
       for (unsigned ch = 0; ch < CRSF_NUM_CHANNELS; ++ch)
       {
-        uint32_t crsfVal = US_to_CRSF(channelValues[ch]); // Преобразование в CRSF
-        scratch |= crsfVal << bitsInScratch;
-        bitsInScratch += CRSF_BITS_PER_CHANNEL;
-        while (bitsInScratch > 8)
-        {
-          *pbuf++ = scratch;
-          scratch >>= 8;
-          bitsInScratch -= 8;
-        }
+        ChannelDataIn[ch] = map(ChannelDataIn[ch], CRSF_CHANNEL_VALUE_MIN, CRSF_CHANNEL_VALUE_MAX, CRSF_CHANNEL_VALUE_MAX, CRSF_CHANNEL_VALUE_MIN);
       }
 
       // Формируем пакет
-      uint8_t packet[CRSF_MAX_PACKET_SIZE];
+      uint8_t packet[CRSF_MAX_PACKET_SIZE] = {0};
       packet[0] = CRSF_SYNC_BYTE;
-      packet[1] = sizeof(packedChannels) + 2; // длина: тип + данные + CRC
+      packet[1] = sizeof(ChannelDataIn) + 2; // Длина данных + тип и CRC
       packet[2] = CRSF_FRAMETYPE_RC_CHANNELS_PACKED;
-      memcpy(&packet[3], packedChannels, sizeof(packedChannels));
-      packet[sizeof(packedChannels) + 3] = crc8(&packet[2], sizeof(packedChannels) + 1);
+
+      // Копируем значения каналов в пакет
+      memcpy(&packet[3], ChannelDataIn, sizeof(ChannelDataIn));
+
+      // Вычисляем CRC
+      packet[sizeof(ChannelDataIn) + 3] = crc8(&packet[2], sizeof(ChannelDataIn) + 1);
 
       // Отправляем пакет
-      Serial2.write(packet, sizeof(packedChannels) + 4);
+      Serial2.write(packet, sizeof(ChannelDataIn) + 4);
+      /*crsfLinkStats.uplink_RSSI_1 = abs(radio.getRSSI());
+      crsfLinkStats.uplink_RSSI_2 = crsfLinkStats.uplink_RSSI_1;
+      crsfLinkStats.uplink_SNR = radio.getSNR();
+      crsfLinkStats.uplink_Link_quality = calculateLinkQuality(crsfLinkStats.uplink_RSSI_1, crsfLinkStats.uplink_SNR);
+      crsfLinkStats.active_antenna = 1;
+      crsfLinkStats.rf_Mode = 1;
+      crsfLinkStats.uplink_TX_Power = 10;
 
-      Serial.println("Channels data transmitted to flight controller.");
+      crsfLinkStats.downlink_RSSI = abs(radio.getRSSI());
+      crsfLinkStats.downlink_SNR = radio.getSNR();
+      crsfLinkStats.downlink_Link_quality = calculateLinkQuality(crsfLinkStats.downlink_RSSI, crsfLinkStats.downlink_SNR);
+
+      uint8_t packetLS[CRSF_MAX_PACKET_SIZE];
+      packetLS[0] = CRSF_SYNC_BYTE;
+      packetLS[1] = sizeof(crsfLinkStats) + 2;
+      packetLS[2] = CRSF_FRAMETYPE_LINK_STATISTICS;
+      memcpy(&packetLS[3], &crsfLinkStats, sizeof(crsfLinkStats));
+
+      packetLS[sizeof(crsfLinkStats) + 3] = crc8(&packetLS[2], sizeof(crsfLinkStats) + 1);
+
+      Serial2.write(packetLS, sizeof(crsfLinkStats) + 4);*/
+
+      Serial.println("Data transmitted to flight controller.");
     }
     else
     {

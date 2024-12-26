@@ -313,7 +313,7 @@ void loop()
       memset(_rxData, 0, sizeof(_rxData));
       Serial.println("CRSF data transmitted successfully!");
       unsigned long delayStart = millis();
-      while (millis() - delayStart < 10)
+      while (millis() - delayStart < 50)
       {
       }
     }
