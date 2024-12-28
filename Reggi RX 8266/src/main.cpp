@@ -1,13 +1,13 @@
 #include <Arduino.h>
 #include <RadioLib.h>
+#include <EEPROM.h>
 #include <ESPAsyncWebServer.h>
-#include <AsyncTCP.h>
 #include <DNSServer.h>
 #include "../../lib/Variables.h"
 #include "../../lib/crsf_protocol.h"
 
 // SPI setup
-SPIClass spi(VSPI);
+SPIClass spi;
 
 // Radio setup
 SX1276 radio = new Module(LORA_NSS, LORA_DIO0, LORA_RST, LORA_DIO1, spi, SPISettings(8000000, MSBFIRST, SPI_MODE0));
@@ -52,31 +52,55 @@ void ICACHE_RAM_ATTR initRadio()
   int state = radio.begin();
   if (state == RADIOLIB_ERR_NONE)
   {
-    Serial.println(F("Radio initialized successfully!"));
   }
   else
   {
-    Serial.print(F("Radio initialization failed, error: "));
-    Serial.println(state);
     while (true)
       delay(10);
   }
 
   if (radio.setFrequency(frequency) != RADIOLIB_ERR_NONE)
   {
-    Serial.println(F("Failed to set frequency"));
     while (true)
       delay(10);
   }
 
-  if (radio.setBandwidth(125.0) != RADIOLIB_ERR_NONE ||
-      radio.setSpreadingFactor(6) != RADIOLIB_ERR_NONE ||
-      radio.setCodingRate(5) != RADIOLIB_ERR_NONE ||
-      radio.setOutputPower(power) != RADIOLIB_ERR_NONE)
+ if (radio.setFrequency(frequency) != RADIOLIB_ERR_INVALID_FREQUENCY)
   {
-    Serial.println(F("Radio configuration failed"));
     while (true)
       delay(10);
+  }
+
+  if (radio.setBandwidth(250.0) == RADIOLIB_ERR_INVALID_BANDWIDTH)
+  {
+    while (true)
+    {
+      delay(10);
+    }
+  }
+
+  if (radio.setSpreadingFactor(6) == RADIOLIB_ERR_INVALID_SPREADING_FACTOR)
+  {
+    while (true)
+    {
+      delay(10);
+    }
+  }
+
+  if (radio.setCodingRate(5) == RADIOLIB_ERR_INVALID_CODING_RATE)
+  {
+    while (true)
+    {
+      delay(10);
+    }
+  }
+
+  if (radio.setOutputPower(power) == RADIOLIB_ERR_INVALID_OUTPUT_POWER)
+  {
+    while (true)
+    {
+      delay(10);
+    }
   }
 
   radio.setDio0Action(setFlag, RISING);
@@ -99,14 +123,11 @@ void ICACHE_RAM_ATTR bind_do_receive()
       int state = radio.transmit(bindSuccessData, sizeof(bindSuccessData));
       if (state == RADIOLIB_ERR_NONE)
       {
-        Serial.println("Binding successful, acknowledgment sent!");
         bindingRequested = false;
         bindingCompleted = true;
       }
       else
       {
-        Serial.print("Binding acknowledgment failed, error: ");
-        Serial.println(state);
       }
     }
   }
@@ -136,7 +157,7 @@ void ICACHE_RAM_ATTR setupWebServer()
     html += "</body></html>";
     request->send(200, "text/html", html); });
 
-  /*server.on("/set", HTTP_GET, [](AsyncWebServerRequest *request)
+  server.on("/set", HTTP_GET, [](AsyncWebServerRequest *request)
             {
     if (request->hasParam("freq")) {
       frequency = request->getParam("freq")->value().toFloat();
@@ -149,7 +170,7 @@ void ICACHE_RAM_ATTR setupWebServer()
     EEPROM.commit();
     request->redirect("/config");
     delay(1000);
-    ESP.restart(); });*/
+    ESP.restart(); });
   server.begin();
   webServerStarted = true;
 }
@@ -176,9 +197,17 @@ uint8_t ICACHE_RAM_ATTR calculateLinkQuality(uint8_t rssi, int8_t snr)
 
 void setup()
 {
-  Serial.begin(115200);
-  Serial2.begin(420000);
+  Serial.begin(420000);
+  EEPROM.begin(512);
   spi.begin();
+
+  EEPROM.get(EEPROM_FREQ_ADDR, frequency);
+  EEPROM.get(EEPROM_POWER_ADDR, power);
+
+  if (frequency < 100.0 || frequency > 1000.0)
+    frequency = 750.0;
+  if (power < 2 || power > 20)
+    power = 10;
 
   WiFi.softAP("Reggi RX", "12345678");
   IPAddress apIP(10, 0, 0, 1);
@@ -188,7 +217,6 @@ void setup()
   initRadio();
   radio.startReceive();
   bindStartTime = millis();
-  Serial.println("Receiver setup complete.");
 }
 
 void loop()
@@ -197,19 +225,16 @@ void loop()
 
   if (!bindingRequested && !bindingCompleted)
   {
-    Serial.println("Starting binding process...");
     bindingRequested = true;
     bindStartTime = millis();
   }
 
   if (bindingRequested && !bindingCompleted)
   {
-    Serial.println("Processing binding...");
     bind_do_receive();
 
     if (millis() - bindStartTime > bindingTimeout)
     {
-      Serial.println("Binding timeout. Binding process failed.");
       if (!webServerStarted)
       {
         setupWebServer();
@@ -231,6 +256,7 @@ void loop()
       // DEBUG
       // packetCount++;
 
+
       memcpy(&receivedData, receivedPacket, sizeof(crsf_data_t));
       uint16_t ChannelDataIn[16] = {0};
 
@@ -251,28 +277,26 @@ void loop()
       ChannelDataIn[14] = receivedData.channels.channel15;
       ChannelDataIn[15] = receivedData.channels.channel16;
 
+      // Инвертируем значения каналов
       for (unsigned ch = 0; ch < CRSF_NUM_CHANNELS; ++ch)
       {
         ChannelDataIn[ch] = map(ChannelDataIn[ch], CRSF_CHANNEL_VALUE_MIN, CRSF_CHANNEL_VALUE_MAX, CRSF_CHANNEL_VALUE_MAX, CRSF_CHANNEL_VALUE_MIN);
       }
 
-      for (unsigned ch = 0; ch < 16; ++ch)
-      {
-        smoothedChannels[ch] = smoothedChannels[ch] * (1.0 - SMOOTHING_FACTOR) + ChannelDataIn[ch] * SMOOTHING_FACTOR;
-        ChannelDataIn[ch] = (uint16_t)smoothedChannels[ch];
-      }
-
+      // Формируем пакет
       uint8_t packet[CRSF_MAX_PACKET_SIZE] = {0};
       packet[0] = CRSF_SYNC_BYTE;
-      packet[1] = sizeof(ChannelDataIn) + 2;
+      packet[1] = sizeof(ChannelDataIn) + 2; // Длина данных + тип и CRC
       packet[2] = CRSF_FRAMETYPE_RC_CHANNELS_PACKED;
 
-
+      // Копируем значения каналов в пакет
       memcpy(&packet[3], ChannelDataIn, sizeof(ChannelDataIn));
 
+      // Вычисляем CRC
       packet[sizeof(ChannelDataIn) + 3] = crc8(&packet[2], sizeof(ChannelDataIn) + 1);
 
-      Serial2.write(packet, sizeof(ChannelDataIn) + 4);
+      // Отправляем пакет
+      Serial.write(packet, sizeof(ChannelDataIn) + 4);
       /*crsfLinkStats.uplink_RSSI_1 = abs(radio.getRSSI());
       crsfLinkStats.uplink_RSSI_2 = crsfLinkStats.uplink_RSSI_1;
       crsfLinkStats.uplink_SNR = radio.getSNR();
@@ -295,12 +319,9 @@ void loop()
 
       Serial2.write(packetLS, sizeof(crsfLinkStats) + 4);*/
 
-      Serial.println("Data transmitted to flight controller.");
     }
     else
     {
-      Serial.print("Failed to receive packet, error: ");
-      Serial.println(state);
     }
   }
 }

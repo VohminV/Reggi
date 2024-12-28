@@ -7,7 +7,7 @@
 #define LORA_DIO0 26
 #define LORA_DIO1 25
 #define LORA_RST 14
-#define LORA_BUSY 26
+#define LORA_BUSY -1
 #define LORA_TXEN -1
 #define LORA_RXEN -1
 
@@ -23,13 +23,9 @@ uint32_t bindStartTime = 0;
 const uint32_t pingInterval = 1000;
 unsigned long timeout = 0;
 
-// EEPROM Addresses
-#define EEPROM_FREQ_ADDR 0
-#define EEPROM_POWER_ADDR 4
-
 // Default radio values
-float frequency = 450.0; // Default frequency in MHz
-int power = 10;          // Default power in dBm
+float ICACHE_RAM_ATTR frequency = 450.5; // Default frequency in MHz
+int ICACHE_RAM_ATTR power = 10;          // Default power in dBm
 
 // Web Server
 bool webServerStarted = false;
@@ -49,3 +45,13 @@ typedef struct crsf_data_s
 unsigned long packetCount = 0;       
 unsigned long lastTime = 0;        
 unsigned int packetsPerMinute = 0; 
+
+//smoothedValue=previousValue×(1−smoothingFactor)+currentValue×smoothingFactor
+//сглаживание каналов
+#define SMOOTHING_FACTOR 0.2
+static float smoothedChannels[16] = {0};
+
+uint16_t ICACHE_RAM_ATTR fmap(uint16_t x, float in_min, float in_max, float out_min, float out_max)
+{
+  return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
+};

@@ -1,6 +1,5 @@
 #include <Arduino.h>
 #include <RadioLib.h>
-#include <EEPROM.h>
 #include <ESPAsyncWebServer.h>
 #include <AsyncTCP.h>
 #include <DNSServer.h>
@@ -10,7 +9,7 @@
 // SPI setup
 SPIClass spi(VSPI);
 // Radio setup
-SX1278 radio = new Module(LORA_NSS, LORA_DIO0, LORA_RST, LORA_DIO1, spi, SPISettings(8000000, MSBFIRST, SPI_MODE0));
+SX1276 radio = new Module(LORA_NSS, LORA_DIO0, LORA_RST, LORA_DIO1, spi, SPISettings(8000000, MSBFIRST, SPI_MODE0));
 // CRSF Serial setup
 HardwareSerial CRSFSerial(1);
 
@@ -137,7 +136,7 @@ void ICACHE_RAM_ATTR setupWebServer()
     html += "</body></html>";
     request->send(200, "text/html", html); });
 
-  server.on("/set", HTTP_GET, [](AsyncWebServerRequest *request)
+  /*server.on("/set", HTTP_GET, [](AsyncWebServerRequest *request)
             {
     if (request->hasParam("freq")) {
       frequency = request->getParam("freq")->value().toFloat();
@@ -150,7 +149,7 @@ void ICACHE_RAM_ATTR setupWebServer()
     EEPROM.commit();
     request->redirect("/config");
     delay(1000);
-    ESP.restart(); });
+    ESP.restart(); });*/
   server.begin();
   webServerStarted = true;
 }
@@ -222,17 +221,9 @@ void ICACHE_RAM_ATTR leftShift(uint8_t arr[], size_t size)
 void setup()
 {
   Serial.begin(115200);
-  EEPROM.begin(512);
   spi.begin();
 
   CRSFSerial.begin(420000, SERIAL_8N1, CRSF_PIN, CRSF_PIN, true); // false
-  EEPROM.get(EEPROM_FREQ_ADDR, frequency);
-  EEPROM.get(EEPROM_POWER_ADDR, power);
-
-  if (frequency < 100.0 || frequency > 1000.0)
-    frequency = 450.0;
-  if (power < 2 || power > 20)
-    power = 10;
 
   WiFi.softAP("Reggi TX", "12345678");
   IPAddress apIP(10, 0, 0, 1);
@@ -257,11 +248,9 @@ void loop()
 
   if (bindingRequested && !bindingCompleted)
   {
-    Serial.println("Processing binding...");
     bind_do_transmit();
     if (millis() - bindStartTime > bindingTimeout)
     {
-      Serial.println("Binding timeout. Binding process failed.");
       bindingRequested = false;
       bindingCompleted = false;
       if (!webServerStarted)
@@ -280,7 +269,7 @@ void loop()
     {
       _rxData[CRSF_MAX_PACKET_SIZE - 1] = CRSFSerial.read();
       if (crc8(&_rxData[CRSF_MAX_PACKET_SIZE - size],
-             _rxData[CRSF_MAX_PACKET_SIZE - size - 1]) == 0)
+               _rxData[CRSF_MAX_PACKET_SIZE - size - 1]) == 0)
       {
         if ((_rxData[CRSF_MAX_PACKET_SIZE - size - 2] ==
              CRSF_ADDRESS_FLIGHT_CONTROLLER) ||
@@ -290,8 +279,25 @@ void loop()
           if (_rxData[CRSF_MAX_PACKET_SIZE - size] ==
               CRSF_FRAMETYPE_RC_CHANNELS_PACKED)
           {
-            memcpy(&txData.channels, &_rxData[CRSF_MAX_PACKET_SIZE - size + 1],
-                   sizeof(txData.channels));
+            // Получаем указатель на данные каналов
+            const crsf_channels_t *channels = reinterpret_cast<const crsf_channels_t *>(&_rxData[CRSF_MAX_PACKET_SIZE - size + 1]);
+
+            txData.channels.channel1 = map(channels->channel1, CRSF_CHANNEL_VALUE_1000, CRSF_CHANNEL_VALUE_2000, 1000, 2000);
+            txData.channels.channel2 = map(channels->channel2, CRSF_CHANNEL_VALUE_1000, CRSF_CHANNEL_VALUE_2000, 1000, 2000);
+            txData.channels.channel3 = map(channels->channel3, CRSF_CHANNEL_VALUE_1000, CRSF_CHANNEL_VALUE_2000, 1000, 2000);
+            txData.channels.channel4 = map(channels->channel4, CRSF_CHANNEL_VALUE_1000, CRSF_CHANNEL_VALUE_2000, 1000, 2000);
+            txData.channels.channel5 = map(channels->channel5, CRSF_CHANNEL_VALUE_1000, CRSF_CHANNEL_VALUE_2000, 1000, 2000);
+            txData.channels.channel6 = map(channels->channel6, CRSF_CHANNEL_VALUE_1000, CRSF_CHANNEL_VALUE_2000, 1000, 2000);
+            txData.channels.channel7 = map(channels->channel7, CRSF_CHANNEL_VALUE_1000, CRSF_CHANNEL_VALUE_2000, 1000, 2000);
+            txData.channels.channel8 = map(channels->channel8, CRSF_CHANNEL_VALUE_1000, CRSF_CHANNEL_VALUE_2000, 1000, 2000);
+            txData.channels.channel9 = map(channels->channel9, CRSF_CHANNEL_VALUE_1000, CRSF_CHANNEL_VALUE_2000, 1000, 2000);
+            txData.channels.channel10 = map(channels->channel10, CRSF_CHANNEL_VALUE_1000, CRSF_CHANNEL_VALUE_2000, 1000, 2000);
+            txData.channels.channel11 = map(channels->channel11, CRSF_CHANNEL_VALUE_1000, CRSF_CHANNEL_VALUE_2000, 1000, 2000);
+            txData.channels.channel12 = map(channels->channel12, CRSF_CHANNEL_VALUE_1000, CRSF_CHANNEL_VALUE_2000, 1000, 2000);
+            txData.channels.channel13 = map(channels->channel13, CRSF_CHANNEL_VALUE_1000, CRSF_CHANNEL_VALUE_2000, 1000, 2000);
+            txData.channels.channel14 = map(channels->channel14, CRSF_CHANNEL_VALUE_1000, CRSF_CHANNEL_VALUE_2000, 1000, 2000);
+            txData.channels.channel15 = map(channels->channel15, CRSF_CHANNEL_VALUE_1000, CRSF_CHANNEL_VALUE_2000, 1000, 2000);
+            txData.channels.channel16 = map(channels->channel16, CRSF_CHANNEL_VALUE_1000, CRSF_CHANNEL_VALUE_2000, 1000, 2000);
           }
         }
       }
@@ -311,16 +317,9 @@ void loop()
     if (state == RADIOLIB_ERR_NONE)
     {
       memset(_rxData, 0, sizeof(_rxData));
-      Serial.println("CRSF data transmitted successfully!");
-      unsigned long delayStart = millis();
-      while (millis() - delayStart < 50)
-      {
-      }
     }
     else
     {
-      Serial.print("CRSF data transmission failed, error: ");
-      Serial.println(state);
     }
   }
 }
